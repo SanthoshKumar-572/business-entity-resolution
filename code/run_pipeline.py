@@ -31,6 +31,13 @@ import subprocess
 import argparse
 import time
 
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(SCRIPT_DIR)
 
@@ -48,7 +55,9 @@ def run_step(step_num: int, script: str, args: list = None, description: str = "
     print(f"{'='*60}")
 
     start = time.time()
-    result = subprocess.run(cmd, cwd=ROOT)
+    env = os.environ.copy()
+    env["PYTHONUTF8"] = "1"
+    result = subprocess.run(cmd, cwd=ROOT, env=env)
     elapsed = time.time() - start
 
     if result.returncode == 0:

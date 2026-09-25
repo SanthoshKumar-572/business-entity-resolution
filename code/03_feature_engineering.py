@@ -1,7 +1,7 @@
 """
 03_feature_engineering.py
 ==========================
-Compute features for every candidate pair in output/candidate_pairs.tsv.
+Compute features for every candidate pair in candidate_pairs.tsv.
 
 Features computed per pair:
   BUSINESS NAME:
@@ -37,13 +37,7 @@ Features computed per pair:
     - is_addr_missing_s1       : S1 address is empty
     - is_addr_missing_cand     : Candidate address is empty
 
-Output: output/features.parquet  (parquet for speed/compression)
-Also saves a lightweight TSV of pair IDs + label for training.
-
-Label column:
-  label = 1 if candidate_entity_id in ground_truth[source1_entity_id]
-  label = 0 otherwise
-  label = -1 for test data (no ground truth)
+Output: output/features_train.parquet / output/features_test.parquet
 """
 
 import os
@@ -51,8 +45,17 @@ import sys
 import gc
 from difflib import SequenceMatcher
 
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 import pandas as pd
 import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
 from tqdm import tqdm
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -81,11 +84,11 @@ GROUND_TRUTH = os.path.join(TRAIN_DIR, "train_ground_truth.tsv")
 OUTPUT_TRAIN_FEATURES = os.path.join(OUTPUT_DIR, "features_train.parquet")
 OUTPUT_TEST_FEATURES = os.path.join(OUTPUT_DIR, "features_test.parquet")
 
-CHUNK_SIZE = 50_000  # pairs per feature chunk
+CHUNK_SIZE = 50_000
 
 
 # ---------------------------------------------------------------------------
-# Helper feature functions (vectorized where possible)
+# Helper feature functions
 # ---------------------------------------------------------------------------
 
 def char_ngrams(text: str, n: int = 3) -> set:
@@ -156,7 +159,7 @@ def len_diff_ratio(a: str, b: str) -> float:
 
 
 def char_sim(a: str, b: str) -> float:
-    """Character-level sequence similarity (SequenceMatcher)."""
+    """Character-level sequence similarity."""
     if not a and not b:
         return 1.0
     if not a or not b:
@@ -169,7 +172,7 @@ def fuzzy_features(a: str, b: str) -> tuple:
     if not HAS_RAPIDFUZZ:
         return (0.0, 0.0, 0.0, 0.0)
     if not a and not b:
-        return (100.0, 100.0, 100.0, 100.0)
+        return (1.0, 1.0, 1.0, 1.0)
     if not a or not b:
         return (0.0, 0.0, 0.0, 0.0)
     r = rfuzz.ratio(a, b)
@@ -180,13 +183,42 @@ def fuzzy_features(a: str, b: str) -> tuple:
 
 
 # ---------------------------------------------------------------------------
-# Entity lookup: pre-load normalized records into memory
+# Entity lookup: pre-load ONLY needed normalized records into memory
 # ---------------------------------------------------------------------------
 
-def load_entity_lookup(source_files: list) -> dict:
+def collect_needed_ids(candidate_file: str) -> tuple:
+    """Collect unique S1 IDs and Candidate IDs present in candidate_file."""
+    print(f"  Scanning candidate file {candidate_file} for active entity IDs ...")
+    needed_s1 = set()
+    needed_cands = set()
+    if not os.path.isfile(candidate_file):
+        return needed_s1, needed_cands
+
+    reader = pd.read_csv(candidate_file, sep="\t", dtype=str, chunksize=100_000)
+    for chunk in reader:
+        chunk = chunk.fillna("")
+        cols = chunk.columns.tolist()
+        s1_col = "source1_entity_id" if "source1_entity_id" in cols else cols[0]
+        c_col = "candidate_entity_ids" if "candidate_entity_ids" in cols else (cols[1] if len(cols) > 1 else "")
+        for row in chunk.itertuples(index=False):
+            s1_id = str(getattr(row, s1_col, "")).strip()
+            c_str = str(getattr(row, c_col, "")).strip() if c_col else ""
+            if s1_id and c_str:
+                needed_s1.add(s1_id)
+                for cid in c_str.split(","):
+                    cid = cid.strip()
+                    if cid:
+                        needed_cands.add(cid)
+        del chunk
+
+    print(f"  Active entities required: {len(needed_s1):,} S1 IDs, {len(needed_cands):,} candidate IDs")
+    return needed_s1, needed_cands
+
+
+def load_entity_lookup(source_files: list, needed_ids: set = None) -> dict:
     """
-    Load entity records from source files.
-    Returns dict: entity_id → (norm_name, norm_addr, norm_country, raw_country).
+    Load entity records from source files filtered by needed_ids.
+    Returns dict: entity_id -> (norm_name, norm_addr, norm_country, raw_country).
     """
     lookup = {}
     for fpath in source_files:
@@ -195,23 +227,24 @@ def load_entity_lookup(source_files: list) -> dict:
             continue
         print(f"  Loading {os.path.basename(fpath)} ...")
         reader = pd.read_csv(
-            fpath, sep="\t", dtype=str, chunksize=200_000,
+            fpath, sep="\t", dtype=str, chunksize=250_000,
             usecols=["entity_id", "business_name", "business_address", "country"],
         )
         for chunk in tqdm(reader, desc=f"    {os.path.basename(fpath)}"):
             chunk = chunk.fillna("")
             for row in chunk.itertuples(index=False):
-                lookup[row.entity_id] = (
+                eid = row.entity_id
+                if needed_ids is not None and eid not in needed_ids:
+                    continue
+                lookup[eid] = (
                     normalize_name(row.business_name),
                     normalize_address(row.business_address),
                     normalize_country(row.country),
                     row.country,
-                    row.business_name,
-                    row.business_address,
                 )
             del chunk
         gc.collect()
-    print(f"  Entity lookup size: {len(lookup):,}")
+    print(f"  Loaded entity lookup size: {len(lookup):,}")
     return lookup
 
 
@@ -219,8 +252,7 @@ def load_ground_truth() -> dict:
     """Load ground truth: {s1_id: set(matched_entity_ids)}."""
     print(f"  Loading ground truth from {GROUND_TRUTH} ...")
     gt = {}
-    df = pd.read_csv(GROUND_TRUTH, sep="\t", dtype=str)
-    df = df.fillna("")
+    df = pd.read_csv(GROUND_TRUTH, sep="\t", dtype=str).fillna("")
     for row in df.itertuples(index=False):
         s1_id = row.source1_entity_id
         matched = row.matched_entity_ids
@@ -248,16 +280,15 @@ def compute_features_for_pair(
     s1_data = s1_lookup.get(s1_id)
     cand_data = cand_lookup.get(cand_id)
 
-    # Handle missing entity data
     if s1_data is None:
         s1_nn, s1_na, s1_nc, s1_rc = "", "", "", ""
     else:
-        s1_nn, s1_na, s1_nc, s1_rc = s1_data[0], s1_data[1], s1_data[2], s1_data[3]
+        s1_nn, s1_na, s1_nc, s1_rc = s1_data
 
     if cand_data is None:
         c_nn, c_na, c_nc, c_rc = "", "", "", ""
     else:
-        c_nn, c_na, c_nc, c_rc = cand_data[0], cand_data[1], cand_data[2], cand_data[3]
+        c_nn, c_na, c_nc, c_rc = cand_data
 
     # Token sets
     s1_name_tokens = get_name_tokens(s1_nn)
@@ -269,11 +300,10 @@ def compute_features_for_pair(
     fn_ratio, fn_partial, fn_token_sort, fn_token_set = fuzzy_features(s1_nn, c_nn)
     fa_ratio, _, _, _ = fuzzy_features(s1_na, c_na)
 
-    # Name char sim
+    # Sequence similarities
     name_cs = char_sim(s1_nn, c_nn)
     addr_cs = char_sim(s1_na, c_na)
 
-    # Combined name + addr similarity (weighted 60% name, 40% addr)
     combined_sim = 0.6 * fn_ratio + 0.4 * fa_ratio
 
     feat = {
@@ -309,7 +339,7 @@ def compute_features_for_pair(
         "is_name_missing_cand": int(c_nn == ""),
         "is_addr_missing_s1": int(s1_na == ""),
         "is_addr_missing_cand": int(c_na == ""),
-        # Source indicator (for multi-source analysis)
+        # Source indicator
         "is_s2_candidate": int(cand_id.startswith("S2-")),
         "is_s3_candidate": int(cand_id.startswith("S3-")),
     }
@@ -332,74 +362,70 @@ def process_candidate_file(
     output_path: str,
     mode: str = "train",
 ):
-    """Process all candidate pairs and save features to parquet."""
+    """Process all candidate pairs and save features incrementally using ParquetWriter."""
     print(f"\n[Features] Processing {candidate_file} → {output_path}")
 
     if not os.path.isfile(candidate_file):
         print(f"  ERROR: {candidate_file} not found.")
         return
 
-    # Read candidate file in wide format (source1_entity_id, candidate_entity_ids CSV)
+    writer = None
     all_features = []
-    chunk_idx = 0
+    total_written = 0
 
     reader = pd.read_csv(
         candidate_file,
         sep="\t",
         dtype=str,
-        chunksize=1_000,  # each row can have many candidates
+        chunksize=5_000,
     )
 
     for chunk in tqdm(reader, desc="  Candidate chunks"):
         chunk = chunk.fillna("")
-        rows_batch = []
+        cols = chunk.columns.tolist()
+        s1_col = "source1_entity_id" if "source1_entity_id" in cols else cols[0]
+        c_col = "candidate_entity_ids" if "candidate_entity_ids" in cols else (cols[1] if len(cols) > 1 else "")
+
         for row in chunk.itertuples(index=False):
-            s1_id = row.source1_entity_id
-            cand_str = (row.candidate_entity_ids if hasattr(row, 'candidate_entity_ids') else "").strip()
+            s1_id = str(getattr(row, s1_col, "")).strip()
+            cand_str = str(getattr(row, c_col, "")).strip() if c_col else ""
             if not cand_str:
-                continue  # no candidates for this S1
-            cands = cand_str.split(",")
-            for cand_id in cands:
+                continue
+
+            for cand_id in cand_str.split(","):
                 cand_id = cand_id.strip()
                 if cand_id:
                     feat = compute_features_for_pair(
                         s1_id, cand_id, s1_lookup, cand_lookup, ground_truth
                     )
-                    rows_batch.append(feat)
+                    all_features.append(feat)
 
-        if rows_batch:
-            all_features.extend(rows_batch)
-
-        # Save in chunks to avoid OOM
-        if len(all_features) >= CHUNK_SIZE * 10:
+        if len(all_features) >= 100_000:
             df_chunk = pd.DataFrame(all_features)
-            if chunk_idx == 0:
-                df_chunk.to_parquet(output_path, index=False)
-            else:
-                existing = pd.read_parquet(output_path)
-                pd.concat([existing, df_chunk], ignore_index=True).to_parquet(output_path, index=False)
+            table = pa.Table.from_pandas(df_chunk)
+            if writer is None:
+                writer = pq.ParquetWriter(output_path, table.schema, compression="snappy")
+            writer.write_table(table)
+            total_written += len(df_chunk)
             all_features = []
-            chunk_idx += 1
+            del df_chunk, table
             gc.collect()
 
         del chunk
 
-    # Write remaining
     if all_features:
-        df_remaining = pd.DataFrame(all_features)
-        if chunk_idx == 0:
-            df_remaining.to_parquet(output_path, index=False)
-        else:
-            existing = pd.read_parquet(output_path)
-            pd.concat([existing, df_remaining], ignore_index=True).to_parquet(output_path, index=False)
+        df_chunk = pd.DataFrame(all_features)
+        table = pa.Table.from_pandas(df_chunk)
+        if writer is None:
+            writer = pq.ParquetWriter(output_path, table.schema, compression="snappy")
+        writer.write_table(table)
+        total_written += len(df_chunk)
+        del df_chunk, table
 
-    if os.path.isfile(output_path):
-        df_final = pd.read_parquet(output_path)
-        print(f"  Saved {len(df_final):,} feature rows → {output_path}")
-        if "label" in df_final.columns and mode == "train":
-            pos = (df_final["label"] == 1).sum()
-            neg = (df_final["label"] == 0).sum()
-            print(f"  Label distribution: positive={pos:,}, negative={neg:,}, ratio={pos/(neg+1):.4f}")
+    if writer is not None:
+        writer.close()
+
+    print(f"  Saved {total_written:,} feature rows → {output_path}")
 
 
 def main():
@@ -422,17 +448,20 @@ def main():
         s2_source = os.path.join(TEST_DIR, "test_source2.tsv")
         s3_source = os.path.join(TEST_DIR, "test_source3.tsv")
         output_path = OUTPUT_TEST_FEATURES
-        # For test, use a separate candidate file
         candidate_file = os.path.join(OUTPUT_DIR, "test_candidate_pairs.tsv")
         ground_truth = None
 
-    # Load entity lookups
-    print("\n[Lookup] Loading S1 entities ...")
-    s1_lookup = load_entity_lookup([s1_source])
-    print("\n[Lookup] Loading S2 + S3 entities ...")
-    cand_lookup = load_entity_lookup([s2_source, s3_source])
+    # Step 1: Scan candidate file to collect active entity IDs
+    needed_s1, needed_cands = collect_needed_ids(candidate_file)
 
-    # Process
+    # Step 2: Load only required entity records
+    print("\n[Lookup] Loading Source 1 records ...")
+    s1_lookup = load_entity_lookup([s1_source], needed_ids=needed_s1)
+
+    print("\n[Lookup] Loading Source 2 + Source 3 records ...")
+    cand_lookup = load_entity_lookup([s2_source, s3_source], needed_ids=needed_cands)
+
+    # Step 3: Compute features and write incrementally
     process_candidate_file(
         candidate_file=candidate_file,
         s1_lookup=s1_lookup,

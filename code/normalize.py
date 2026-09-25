@@ -93,8 +93,11 @@ ADDR_ABBREVS = {
     r"\bpo box\b": "po box",
 }
 
-_COMPILED_LEGAL = [(re.compile(pat), rep) for pat, rep in LEGAL_SUFFIXES.items()]
-_COMPILED_ADDR = [(re.compile(pat), rep) for pat, rep in ADDR_ABBREVS.items()]
+_LEGAL_LOOKUP = {k.replace(r"\b", ""): v for k, v in LEGAL_SUFFIXES.items()}
+_LEGAL_PATTERN = re.compile(r"\b(" + "|".join(re.escape(k) for k in sorted(_LEGAL_LOOKUP.keys(), key=len, reverse=True)) + r")\b")
+
+_ADDR_LOOKUP = {k.replace(r"\b", ""): v for k, v in ADDR_ABBREVS.items()}
+_ADDR_PATTERN = re.compile(r"\b(" + "|".join(re.escape(k) for k in sorted(_ADDR_LOOKUP.keys(), key=len, reverse=True)) + r")\b")
 
 
 def unicode_normalize(text: str) -> str:
@@ -130,9 +133,8 @@ def normalize_name(name: str) -> str:
     # Remove punctuation except spaces
     text = re.sub(r"[^a-z0-9\u0900-\u097f\u00c0-\u024f\s]", " ", text)
 
-    # Apply legal suffix normalization
-    for pat, rep in _COMPILED_LEGAL:
-        text = pat.sub(rep, text)
+    # Apply legal suffix normalization (single pass)
+    text = _LEGAL_PATTERN.sub(lambda m: _LEGAL_LOOKUP[m.group(0)], text)
 
     # Collapse whitespace
     text = re.sub(r"\s+", " ", text).strip()
@@ -159,9 +161,8 @@ def normalize_address(addr: str) -> str:
     # Remove punctuation except spaces, digits, letters
     text = re.sub(r"[^a-z0-9\u0900-\u097f\u00c0-\u024f\s/]", " ", text)
 
-    # Apply address abbreviations
-    for pat, rep in _COMPILED_ADDR:
-        text = pat.sub(rep, text)
+    # Apply address abbreviations (single pass)
+    text = _ADDR_PATTERN.sub(lambda m: _ADDR_LOOKUP[m.group(0)], text)
 
     # Collapse whitespace
     text = re.sub(r"\s+", " ", text).strip()
@@ -204,6 +205,19 @@ def extract_numbers(text: str) -> list:
     return re.findall(r"\d+", text)
 
 
+LEGAL_STOPWORDS = {
+    "the", "and", "of", "in", "at", "to", "for", "a", "an", "dba", "com",
+    "pvt", "ltd", "inc", "corp", "llc", "llp", "co", "grp", "ent", "sol",
+    "inds", "ind", "assoc", "trd", "vent", "intl", "natl", "global", "svcs", "svc"
+}
+
+ADDR_STOPWORDS = {
+    "flat", "door", "no", "plot", "house", "shop", "floor", "fl", "unit",
+    "ste", "apt", "bldg", "room", "first", "second", "third", "near", "opp",
+    "behind", "st", "rd", "ave", "dr", "ln", "road", "street"
+}
+
+
 def get_blocking_keys(norm_name: str, norm_addr: str, country: str) -> list:
     """
     Generate multiple blocking keys for a record.
@@ -213,51 +227,51 @@ def get_blocking_keys(norm_name: str, norm_addr: str, country: str) -> list:
 
     Strategy: Compound keys that are specific enough to avoid combinatorial
     explosion while still capturing all likely matches (high recall).
-    Trigram keys removed to limit false-positive explosion.
     """
     keys = []
 
     tokens = norm_name.split() if norm_name else []
-    # Filter stopwords from candidate token list
-    stop = {"the", "and", "of", "in", "at", "to", "for", "a", "an"}
-    non_trivial = [t for t in tokens if len(t) >= 3 and t not in stop]
+    clean_tokens = [t for t in tokens if len(t) >= 3 and t not in LEGAL_STOPWORDS]
+    if not clean_tokens:
+        clean_tokens = [t for t in tokens if len(t) >= 3]
 
     # ── Name-based keys ──────────────────────────────────────────────────────
-
-    # Key 1: first significant token (≥4 chars) + country
-    if non_trivial:
-        t0 = non_trivial[0]
+    if clean_tokens:
+        t0 = clean_tokens[0]
         if len(t0) >= 4:
             keys.append(("name_tok0_country", f"{t0[:6]}_{country}"))
 
-    # Key 2: sorted bigram of first two significant tokens + country
-    if len(non_trivial) >= 2:
-        bigram = "_".join(sorted([non_trivial[0][:6], non_trivial[1][:6]]))
+    if len(clean_tokens) >= 2:
+        bigram = "_".join(sorted([clean_tokens[0][:6], clean_tokens[1][:6]]))
         keys.append(("name_bigram_country", f"{bigram}_{country}"))
 
-    # Key 3: prefix compound (5+4 chars of first two tokens) + country
-    if len(non_trivial) >= 2:
-        compound = f"{non_trivial[0][:5]}_{non_trivial[1][:4]}_{country}"
+        compound = f"{clean_tokens[0][:5]}_{clean_tokens[1][:4]}_{country}"
         keys.append(("name_compound_country", compound))
 
-    # ── Address-based keys ────────────────────────────────────────────────────
+    # Compacted name for concatenated words (e.g., 'high tech' vs 'hightech')
+    if clean_tokens:
+        compact = "".join(clean_tokens[:2])[:8]
+        if len(compact) >= 5:
+            keys.append(("name_compact_country", f"{compact}_{country}"))
 
+    # ── Address-based keys ────────────────────────────────────────────────────
     addr_nums = extract_numbers(norm_addr)
     addr_tokens = [t for t in norm_addr.split() if len(t) > 1] if norm_addr else []
-    significant_addr = [t for t in addr_tokens if not t.isdigit() and len(t) >= 3]
+    clean_addr = [t for t in addr_tokens if not t.isdigit() and len(t) >= 3 and t not in ADDR_STOPWORDS]
+    if not clean_addr:
+        clean_addr = [t for t in addr_tokens if not t.isdigit() and len(t) >= 3]
 
-    # Key 4: house number + first name token + country (very precise)
-    if addr_nums and non_trivial:
-        keys.append(("addr_num_name_tok0", f"{addr_nums[0]}_{non_trivial[0][:5]}_{country}"))
+    # Key 5: house number + first clean name token + country (very precise)
+    if addr_nums and clean_tokens:
+        keys.append(("addr_num_name_tok0", f"{addr_nums[0]}_{clean_tokens[0][:5]}_{country}"))
 
-    # Key 5: first two significant address tokens + country
-    if len(significant_addr) >= 2:
-        addr_key = f"{significant_addr[0][:8]}_{significant_addr[1][:6]}_{country}"
-        keys.append(("addr_sig2_country", addr_key))
+    # Key 6: first two significant address tokens + country
+    if len(clean_addr) >= 2:
+        keys.append(("addr_sig2_country", f"{clean_addr[0][:8]}_{clean_addr[1][:6]}_{country}"))
 
-    # Key 6: house number + first significant address token + country
-    if addr_nums and significant_addr:
-        keys.append(("addr_num_sig1_country",
-                      f"{addr_nums[0]}_{significant_addr[0][:6]}_{country}"))
+    # Key 7: house number + first significant address token + country
+    if addr_nums and clean_addr:
+        keys.append(("addr_num_sig1_country", f"{addr_nums[0]}_{clean_addr[0][:6]}_{country}"))
 
     return keys
+

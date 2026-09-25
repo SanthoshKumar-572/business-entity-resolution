@@ -22,6 +22,16 @@ import os
 import sys
 import subprocess
 
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+    git_cmd_dir = r"C:\Program Files\Git\cmd"
+    if os.path.isdir(git_cmd_dir) and git_cmd_dir not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = git_cmd_dir + os.pathsep + os.environ.get("PATH", "")
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO_URL = "https://github.com/SanthoshKumar-572/business-entity-resolution.git"
 

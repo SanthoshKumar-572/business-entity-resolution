@@ -24,6 +24,14 @@ Output format:
 import os
 import sys
 import gc
+import csv
+
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 
 import pandas as pd
 import numpy as np
@@ -162,22 +170,24 @@ def main():
 
     # Write output
     print(f"\n[Write] Writing {OUTPUT_FILE} ...")
-    rows = []
-    for s1_id in sorted(all_test_s1):
-        cands = results.get(s1_id, [])
-        # Deduplicate + sort
-        cands = sorted(set(cands))
-        rows.append({
-            "source1_entity_id": s1_id,
-            "matched_entity_ids": ",".join(cands),
-        })
+    total_written = 0
+    non_empty = 0
 
-    out_df = pd.DataFrame(rows)
-    out_df.to_csv(OUTPUT_FILE, sep="\t", index=False)
+    with open(OUTPUT_FILE, "w", newline="", encoding="utf-8") as f_out:
+        writer = csv.writer(f_out, delimiter="\t")
+        writer.writerow(["source1_entity_id", "matched_entity_ids"])
 
-    non_empty = out_df["matched_entity_ids"].str.len().gt(0).sum()
-    empty = len(out_df) - non_empty
-    print(f"  Total S1 entities: {len(out_df):,}")
+        for s1_id in sorted(all_test_s1):
+            cands = results.get(s1_id, [])
+            cands_dedup = sorted(set(cands))
+            cand_str = ",".join(cands_dedup)
+            writer.writerow([s1_id, cand_str])
+            total_written += 1
+            if cand_str:
+                non_empty += 1
+
+    empty = total_written - non_empty
+    print(f"  Total S1 entities: {total_written:,}")
     print(f"  With matches:      {non_empty:,}")
     print(f"  No match (empty):  {empty:,}")
     print(f"[Done] → {OUTPUT_FILE}")

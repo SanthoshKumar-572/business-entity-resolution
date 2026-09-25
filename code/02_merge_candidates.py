@@ -19,7 +19,15 @@ Rules:
 
 import os
 import sys
+import csv
 from collections import defaultdict
+
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 
 import pandas as pd
 from tqdm import tqdm
@@ -37,12 +45,13 @@ LAPTOP2_CANDIDATES = os.path.join(OUTPUT_DIR, "candidates_laptop2.tsv")
 OUTPUT_FILE = os.path.join(OUTPUT_DIR, "candidate_pairs.tsv")
 
 CHUNK_SIZE = 500_000
+MAX_CANDIDATES_PER_S1 = 100  # global cap on final candidate set per S1 entity
 
 
 def read_candidate_file_chunked(filepath: str, label: str) -> dict:
     """
     Read a candidates TSV with columns [source1_entity_id, candidate_entity_id].
-    Returns dict: s1_id → set(candidate_ids).
+    Returns dict: s1_id -> set(candidate_ids).
     """
     print(f"  Reading {label} from {filepath} ...")
     pairs = defaultdict(set)
@@ -107,6 +116,7 @@ def load_all_s1_ids(mode: str = "train") -> set:
 def main():
     print("=" * 60)
     print("Candidate Merging — laptop1 + laptop2 → candidate_pairs.tsv")
+    print(f"  MAX_CANDIDATES_PER_S1 cap: {MAX_CANDIDATES_PER_S1}")
     print("=" * 60)
 
     # Load both candidate files
@@ -121,8 +131,20 @@ def main():
     for s1_id, cands in pairs_l2.items():
         merged[s1_id].update(cands)
 
-    total = sum(len(v) for v in merged.values())
-    print(f"  Merged: {len(merged):,} S1 entities, {total:,} unique candidate pairs")
+    total_before = sum(len(v) for v in merged.values())
+    print(f"  Merged (before cap): {len(merged):,} S1 entities, {total_before:,} unique pairs")
+
+    # Apply global cap per S1 entity (sorted for determinism)
+    capped_count = 0
+    for s1_id in merged:
+        cands = merged[s1_id]
+        if len(cands) > MAX_CANDIDATES_PER_S1:
+            merged[s1_id] = set(sorted(cands)[:MAX_CANDIDATES_PER_S1])
+            capped_count += 1
+
+    total_after = sum(len(v) for v in merged.values())
+    print(f"  After cap: {total_after:,} pairs ({capped_count:,} S1 entities were capped)")
+    print(f"  Reduction from cap: {(1 - total_after / max(total_before, 1)) * 100:.1f}%")
 
     # Load all train S1 IDs to ensure every S1 has a row
     all_s1 = load_all_s1_ids("train")
@@ -132,20 +154,28 @@ def main():
         if s1_id not in merged:
             merged[s1_id] = set()
 
-    # Write output
+    # Write output streaming directly to TSV
     print(f"\n[Write] Writing {OUTPUT_FILE} ...")
-    rows = []
-    for s1_id in tqdm(sorted(merged.keys()), desc="  Building rows"):
-        cands = merged[s1_id]
-        rows.append({
-            "source1_entity_id": s1_id,
-            "candidate_entity_ids": ",".join(sorted(cands)),
-        })
+    written_count = 0
+    non_empty = 0
+    total_written_pairs = 0
 
-    df = pd.DataFrame(rows)
-    df.to_csv(OUTPUT_FILE, sep="\t", index=False)
-    non_empty = df["candidate_entity_ids"].str.len().gt(0).sum()
-    print(f"  Wrote {len(df):,} rows ({non_empty:,} with candidates)")
+    with open(OUTPUT_FILE, "w", newline="", encoding="utf-8") as f_out:
+        writer = csv.writer(f_out, delimiter="\t")
+        writer.writerow(["source1_entity_id", "candidate_entity_ids"])
+
+        for s1_id in tqdm(sorted(merged.keys()), desc="  Writing rows"):
+            cands = merged[s1_id]
+            cand_str = ",".join(sorted(cands))
+            writer.writerow([s1_id, cand_str])
+            written_count += 1
+            if cand_str:
+                non_empty += 1
+                total_written_pairs += len(cands)
+
+    avg_cands = total_written_pairs / max(non_empty, 1)
+    print(f"  Wrote {written_count:,} rows ({non_empty:,} with candidates)")
+    print(f"  Avg candidates per non-empty S1: {avg_cands:.1f}")
     print(f"[Done] → {OUTPUT_FILE}")
     return 0
 

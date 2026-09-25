@@ -14,6 +14,13 @@ import subprocess
 import pandas as pd
 import io
 
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(SCRIPT_DIR)
 sys.path.insert(0, SCRIPT_DIR)
@@ -126,7 +133,7 @@ def main():
         print(f"\n  Blocking recall: {recall:.3f} ({recall_hits}/{total_gt} GT pairs recovered)")
 
     print("\n[4] Testing feature computation ...")
-    from code.normalize import (
+    from normalize import (
         normalize_name, normalize_address, normalize_country,
         get_name_tokens, get_address_tokens, extract_numbers,
     )

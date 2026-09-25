@@ -18,6 +18,13 @@ import os
 import sys
 import json
 
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import GroupShuffleSplit
@@ -50,7 +57,22 @@ RANDOM_SEED = 42
 # Evaluation metric
 # ---------------------------------------------------------------------------
 
-def compute_f05_entity_level(df_val: pd.DataFrame, threshold: float) -> dict:
+def pregroup_val_data(df_val: pd.DataFrame) -> dict:
+    """Pre-group validation data by S1 entity for fast evaluation."""
+    groups = {}
+    for s1_id, cand_id, prob, label in zip(
+        df_val["source1_entity_id"],
+        df_val["candidate_entity_id"],
+        df_val["prob"],
+        df_val["label"],
+    ):
+        if s1_id not in groups:
+            groups[s1_id] = []
+        groups[s1_id].append((cand_id, prob, label))
+    return groups
+
+
+def compute_f05_fast(pregrouped: dict, threshold: float) -> dict:
     """
     Compute F0.5 at entity level (macro-averaged over S1 entities).
 
@@ -58,66 +80,75 @@ def compute_f05_entity_level(df_val: pd.DataFrame, threshold: float) -> dict:
       - predicted = set of candidates where prob >= threshold
       - actual    = set of candidates where label == 1
       - entity f0.5 = (1.25 * p * r) / (0.25 * p + r) if denom > 0, else 1 if both empty
-
-    Returns dict with f05, precision, recall, per-entity details.
     """
-    beta = 0.5
-    beta2 = beta ** 2
-
+    beta2 = 0.25
     entity_scores = []
-    all_s1 = df_val["source1_entity_id"].unique()
+    precisions = []
+    recalls = []
 
-    for s1_id in all_s1:
-        mask = df_val["source1_entity_id"] == s1_id
-        sub = df_val[mask]
-
-        predicted = set(sub.loc[sub["prob"] >= threshold, "candidate_entity_id"])
-        actual = set(sub.loc[sub["label"] == 1, "candidate_entity_id"])
+    for s1_id, items in pregrouped.items():
+        predicted = [cand_id for cand_id, prob, _ in items if prob >= threshold]
+        actual = [cand_id for cand_id, _, label in items if label == 1]
 
         if not predicted and not actual:
             entity_f05 = 1.0
+            precisions.append(1.0)
+            recalls.append(1.0)
         elif not predicted:
             entity_f05 = 0.0
+            precisions.append(0.0)
+            recalls.append(0.0)
         elif not actual:
             entity_f05 = 0.0
+            precisions.append(0.0)
+            recalls.append(0.0)
         else:
-            tp = len(predicted & actual)
-            precision = tp / len(predicted)
-            recall = tp / len(actual)
-            if (beta2 * precision + recall) > 0:
-                entity_f05 = (1 + beta2) * precision * recall / (beta2 * precision + recall)
-            else:
-                entity_f05 = 0.0
+            set_pred = set(predicted)
+            set_act = set(actual)
+            tp = len(set_pred & set_act)
+            p = tp / len(set_pred)
+            r = tp / len(set_act)
+            denom = beta2 * p + r
+            entity_f05 = (1.25 * p * r) / denom if denom > 0 else 0.0
+            precisions.append(p)
+            recalls.append(r)
 
         entity_scores.append(entity_f05)
 
-    macro_f05 = float(np.mean(entity_scores)) if entity_scores else 0.0
-    return {"f05": macro_f05, "n_entities": len(all_s1)}
+    return {
+        "f05": float(np.mean(entity_scores)) if entity_scores else 0.0,
+        "precision": float(np.mean(precisions)) if precisions else 0.0,
+        "recall": float(np.mean(recalls)) if recalls else 0.0,
+        "n_entities": len(pregrouped),
+    }
 
 
 def tune_threshold(df_val: pd.DataFrame, thresholds: list) -> tuple:
     """Evaluate all thresholds on validation set. Returns (best_threshold, metrics_dict)."""
     print("\n[Threshold Tuning]")
-    print(f"  {'Threshold':>10} | {'F0.5':>8} | {'N Entities':>12}")
-    print("  " + "-" * 40)
+    print(f"  {'Threshold':>10} | {'F0.5':>8} | {'Precision':>10} | {'Recall':>8} | {'N Entities':>10}")
+    print("  " + "-" * 56)
+
+    pregrouped = pregroup_val_data(df_val)
 
     best_f05 = -1
     best_threshold = 0.5
     all_metrics = {}
 
     for thr in thresholds:
-        result = compute_f05_entity_level(df_val, thr)
+        result = compute_f05_fast(pregrouped, thr)
         f05 = result["f05"]
         all_metrics[thr] = result
 
         marker = " ← best" if f05 > best_f05 else ""
-        print(f"  {thr:>10.2f} | {f05:>8.4f} | {result['n_entities']:>12,}{marker}")
+        print(f"  {thr:>10.2f} | {f05:>8.4f} | {result['precision']:>10.4f} | {result['recall']:>8.4f} | {result['n_entities']:>10,}{marker}")
 
         if f05 > best_f05:
             best_f05 = f05
             best_threshold = thr
 
     return best_threshold, all_metrics
+
 
 
 def main():
