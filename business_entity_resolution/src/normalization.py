@@ -30,7 +30,7 @@ _NAME_ABBREV_PATTERNS  = _compile_patterns(cfg.NORMALIZATION["name_abbrevs"])
 _ADDR_ABBREV_PATTERNS  = _compile_patterns(cfg.NORMALIZATION["addr_abbrevs"])
 
 # Extra patterns not in config
-_PUNCT_RE      = re.compile(r"[^\w\s]", re.UNICODE)
+_PUNCT_RE      = re.compile(r"[^\w\s\u0900-\u0d7f\u00c0-\u024f]", re.UNICODE)
 _MULTI_SPACE   = re.compile(r"\s+")
 _DIGITS_RE     = re.compile(r"\d+")
 
@@ -41,13 +41,10 @@ _NOISE_PREFIX  = re.compile(r"^[^\w]+")
 # ─── Shared utilities ─────────────────────────────────────────────────────────
 
 def unicode_normalize(text: str) -> str:
-    """Normalize Unicode to NFC form and strip accents (NFKD decompose → ASCII)."""
-    # First NFC
-    text = unicodedata.normalize("NFC", text)
-    # Try to transliterate accented chars by NFKD + encode/decode
-    nfkd = unicodedata.normalize("NFKD", text)
-    ascii_bytes = nfkd.encode("ascii", "ignore")
-    return ascii_bytes.decode("ascii")
+    """Normalize Unicode to NFKC form without erasing non-Latin scripts."""
+    if not isinstance(text, str):
+        return ""
+    return unicodedata.normalize("NFKC", text)
 
 
 def _apply_patterns(text: str, patterns: list) -> str:

@@ -136,6 +136,30 @@ def build_first_token_index(df: pd.DataFrame) -> Dict[str, Set[str]]:
     return index
 
 
+def build_sorted_token_index(df: pd.DataFrame) -> Dict[str, Set[str]]:
+    """Build inverted index: sorted_tokens_string -> set of entity IDs."""
+    index: Dict[str, Set[str]] = defaultdict(set)
+    for eid, norm_name in zip(df["entity_id"], df["norm_name"]):
+        toks = _meaningful_name_tokens(str(norm_name))
+        if len(toks) >= 2:
+            index[" ".join(sorted(toks))].add(eid)
+    return index
+
+
+def build_addr_num_token_index(df: pd.DataFrame) -> Dict[str, Set[str]]:
+    """Build inverted index: house_number + street_token -> set of entity IDs."""
+    index: Dict[str, Set[str]] = defaultdict(set)
+    for eid, norm_addr in zip(df["entity_id"], df["norm_address"]):
+        nums = re.findall(r"\d+", str(norm_addr))
+        toks = _meaningful_addr_tokens(str(norm_addr))
+        if nums and toks:
+            n0 = nums[0]
+            if len(n0) <= 6:
+                for tok in toks[:2]:
+                    index[f"{n0}_{tok}"].add(eid)
+    return index
+
+
 # ─── Batched TF-IDF Blocking ────────────────────────────────────────────────
 
 def batched_tfidf_blocking(
@@ -419,6 +443,29 @@ class BlockingEngine:
             for cid, cnt in addr_overlap.items():
                 if cnt >= 2:
                     candidates[eid].add(cid)
+
+        # ── Strategy G2: Address number + street token ────────────────────────
+        addr_num_idx = build_addr_num_token_index(t_df)
+        for eid, norm_addr in zip(s1_grp["entity_id"], s1_grp["norm_address"]):
+            nums = re.findall(r"\d+", str(norm_addr))
+            toks = _meaningful_addr_tokens(str(norm_addr))
+            if nums and toks:
+                n0 = nums[0]
+                if len(n0) <= 6:
+                    for tok in toks[:2]:
+                        k = f"{n0}_{tok}"
+                        if k in addr_num_idx:
+                            candidates[eid].update(addr_num_idx[k])
+
+        # ── Strategy B2: Sorted token match (handles word reordering) ─────────
+        sorted_tok_idx = build_sorted_token_index(t_df)
+        for eid, norm_name in zip(s1_grp["entity_id"], s1_grp["norm_name"]):
+            s1_toks = _meaningful_name_tokens(str(norm_name))
+            if len(s1_toks) >= 2:
+                key = " ".join(sorted(s1_toks))
+                if key in sorted_tok_idx:
+                    candidates[eid].update(sorted_tok_idx[key])
+
 
         # ── Strategy H: Batched TF-IDF blocking ─────────────────────────────
         # Apply to ALL group sizes using batched processing

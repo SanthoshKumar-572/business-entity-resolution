@@ -1,0 +1,35 @@
+=================================================================
+PERSON 1: 100K S1 BLOCKING RECALL & CANDIDATE STATISTICS
+=================================================================
+
+S1 Entities Evaluated:      100,000
+Entities with Matches:      94,317
+Singleton Entities:         5,683 (5.68%)
+Ground Truth Matches:       345,670
+
+-----------------------------------------------------------------
+COMPARISON: CURRENT vs IMPROVED BLOCKING
+-----------------------------------------------------------------
+Metric                         | Current Blocking   | Improved Blocking 
+-----------------------------------------------------------------
+True Matches Found             | 345,250            | 345,494           
+Missed Matches                 | 420                | 176               
+Blocking Recall                | 99.88            % | 99.95            %
+Estimated Final Candidates     | 3,014,000          | 3,017,195         
+Avg Candidates / S1            | 30.1               | 30.2              
+-----------------------------------------------------------------
+
+Net Recovery: +244 True Matches (+0.07% Recall Gain)
+
+MISSED MATCH PATTERN BREAKDOWN (Current Blocking):
+  - transliteration_devanagari_erasure :   324 ( 77.1%)
+  - address_numeric_match              :    44 ( 10.5%)
+  - dba_trade_name_or_different        :    37 (  8.8%)
+  - missing_address                    :     7 (  1.7%)
+  - acronym_short_name                 :     4 (  1.0%)
+  - word_overlap_below_threshold       :     3 (  0.7%)
+  - spelling_variation                 :     1 (  0.2%)
+
+SINGLETON VS MULTI-MATCH ENTITY DISTRIBUTION (Misses):
+  - Single-Match Entities:   7 (1.7%)
+  - Multi-Match Entities:    413 (98.3%)

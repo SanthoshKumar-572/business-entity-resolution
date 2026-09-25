@@ -131,7 +131,7 @@ def normalize_name(name: str) -> str:
     text = text.replace("&", " and ")
 
     # Remove punctuation except spaces
-    text = re.sub(r"[^a-z0-9\u0900-\u097f\u00c0-\u024f\s]", " ", text)
+    text = re.sub(r"[^a-z0-9\u0900-\u0d7f\u00c0-\u024f\s]", " ", text)
 
     # Apply legal suffix normalization (single pass)
     text = _LEGAL_PATTERN.sub(lambda m: _LEGAL_LOOKUP[m.group(0)], text)
@@ -159,7 +159,7 @@ def normalize_address(addr: str) -> str:
     text = text.lower().strip()
 
     # Remove punctuation except spaces, digits, letters
-    text = re.sub(r"[^a-z0-9\u0900-\u097f\u00c0-\u024f\s/]", " ", text)
+    text = re.sub(r"[^a-z0-9\u0900-\u0d7f\u00c0-\u024f\s/]", " ", text)
 
     # Apply address abbreviations (single pass)
     text = _ADDR_PATTERN.sub(lambda m: _ADDR_LOOKUP[m.group(0)], text)

@@ -1,0 +1,65 @@
+{
+  "experiment": "Person 1 - 100K S1 Blocking Benchmark",
+  "s1_entities": 100000,
+  "singletons_s1": 5683,
+  "entities_with_matches": 94317,
+  "true_matches": 345670,
+  "current_blocking": {
+    "true_matches_found": 345250,
+    "missed_true_matches": 420,
+    "blocking_recall": 0.9988,
+    "blocking_recall_pct": 99.88,
+    "raw_candidates_est": 44630000,
+    "final_candidates_est": 3014000,
+    "avg_candidates_per_s1": 30.1,
+    "strategy_hits": {
+      "B_first_tok": 175772,
+      "A_exact_name": 90607,
+      "D_token_overlap": 25541,
+      "G_addr_tokens": 29837,
+      "C_prefix4": 16652,
+      "F_postal": 436,
+      "E_ngram3": 6405
+    }
+  },
+  "improved_blocking": {
+    "true_matches_found": 345494,
+    "missed_true_matches": 176,
+    "blocking_recall": 0.9995,
+    "blocking_recall_pct": 99.95,
+    "matches_recovered": 244,
+    "recall_improvement_pct": 0.07,
+    "final_candidates_est": 3017195,
+    "avg_candidates_per_s1": 30.2,
+    "strategy_hits": {
+      "3_first_token": 100852,
+      "1_exact_name": 76794,
+      "5_distinctive_token_overlap": 22878,
+      "8_addr_num_and_token": 25085,
+      "2_sorted_tokens": 90469,
+      "4_prefix3": 18509,
+      "9_addr_tokens": 4452,
+      "7_postal_code": 416,
+      "6_ngram3": 6039
+    }
+  },
+  "miss_analysis": {
+    "total_misses_current": 420,
+    "single_match_entity_misses": 7,
+    "multi_match_entity_misses": 413,
+    "patterns": {
+      "transliteration_devanagari_erasure": 324,
+      "missing_address": 7,
+      "address_numeric_match": 44,
+      "dba_trade_name_or_different": 37,
+      "acronym_short_name": 4,
+      "word_overlap_below_threshold": 3,
+      "spelling_variation": 1
+    }
+  },
+  "leaderboard_diagnosis": {
+    "leaderboard_f05": 0.056,
+    "root_cause": "The submission file (matching_results.tsv) contained only 1,000 evaluated test entities against a tiny 100k slice; the remaining 1,731,544 test entities were populated as empty strings (singletons). Since the challenge ground truth contains ~5.6% true singletons, an empty prediction achieves Macro F0.5 = 1.0 for singletons and 0.0 for all entities with matches: 0.056 * 1.0 + 0.944 * 0.0 = 0.056 exactly.",
+    "blocking_implications": "The candidate generation engine must execute on ALL 1.73M test entities, not a 1,000-entity verification subset. Furthermore, blocking must use streaming chunks to prevent memory crashes while preserving multi-strategy recall."
+  }
+}
