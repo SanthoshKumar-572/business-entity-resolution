@@ -37,7 +37,10 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(SCRIPT_DIR)
 sys.path.insert(0, SCRIPT_DIR)
 
-from normalize import normalize_name, normalize_address, normalize_country, get_blocking_keys, get_name_tokens
+from normalize import (
+    normalize_name, normalize_address, normalize_country,
+    get_blocking_keys, get_name_tokens, extract_numbers, LEGAL_STOPWORDS
+)
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -74,8 +77,12 @@ def token_overlap_score(name_a: str, name_b: str,
         return 0.0
 
     # Name token Jaccard
-    toks_a = set(t for t in name_a.split() if len(t) >= 3)
-    toks_b = set(t for t in name_b.split() if len(t) >= 3)
+    toks_a = set(t for t in name_a.split() if len(t) >= 3 and t not in LEGAL_STOPWORDS)
+    toks_b = set(t for t in name_b.split() if len(t) >= 3 and t not in LEGAL_STOPWORDS)
+    if not toks_a:
+        toks_a = set(t for t in name_a.split() if len(t) >= 3)
+    if not toks_b:
+        toks_b = set(t for t in name_b.split() if len(t) >= 3)
 
     if toks_a or toks_b:
         inter = len(toks_a & toks_b)
@@ -90,13 +97,10 @@ def token_overlap_score(name_a: str, name_b: str,
     prefix_bonus = 0.15 if prefix_a and prefix_a == prefix_b else 0.0
 
     # Address number overlap
-    import re
-    nums_a = set(re.findall(r"\d+", addr_a))
-    nums_b = set(re.findall(r"\d+", addr_b))
+    nums_a = set(extract_numbers(addr_a))
+    nums_b = set(extract_numbers(addr_b))
     if nums_a and nums_b:
         addr_num_score = len(nums_a & nums_b) / len(nums_a | nums_b)
-    elif not nums_a and not nums_b:
-        addr_num_score = 0.0
     else:
         addr_num_score = 0.0
 
