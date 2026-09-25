@@ -1,0 +1,50 @@
+# Dataset files (too large for git)
+dataset/
+
+# Output files (derived, not source code)
+output/
+
+# Model files (binary)
+model/
+
+# TSV data files anywhere
+*.tsv
+*.tsv.gz
+*.csv.gz
+
+# Parquet feature files
+*.parquet
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.bak
+scratch/
+
+# Large cache files
+*.pkl
+*.pickle
