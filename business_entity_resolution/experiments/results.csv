@@ -1,0 +1,6 @@
+﻿timestamp,model,sample_size,blocking_strategy,threshold,precision,recall,f05,candidate_count,match_count,singleton_count
+2026-09-25T14:20:10.215321,xgboost,2000,multi-strategy-union,0.825,0.9896,0.9876,0.9883,60932,6924,24
+2026-09-25T14:24:55.179984,xgboost,2000,multi-strategy-union,0.95,0.9948,0.9766,0.9896,60932,6924,26
+2026-09-25T14:29:38.587303,xgboost,2000,multi-strategy-union,0.905,0.9938,0.9824,0.9903,60932,6924,25
+2026-09-25T16:11:19.308306,xgboost,500,multi-strategy-union,0.635,0.9938,0.9829,0.9897,14987,1705,7
+2026-09-25T16:21:22.891072,xgboost,10000,multi-strategy-union,0.85,0.9934,0.987,0.9908,301395,34768,122

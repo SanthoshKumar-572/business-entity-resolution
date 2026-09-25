@@ -1,50 +1,47 @@
-# Dataset files (too large for git)
-dataset/
-
-# Output files (derived, not source code)
-output/
-
-# Model files (binary)
-model/
-
-# TSV data files anywhere
-*.tsv
-*.tsv.gz
-*.csv.gz
-
-# Parquet feature files
-*.parquet
-
-# Python cache
+# Python
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+*$py.class
+*.so
 .Python
-
-# Virtual environments
+env/
 venv/
 .venv/
-env/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# macOS
+# Testing & Cache
+.pytest_cache/
+.coverage
+htmlcov/
+cache/
+logs/
 .DS_Store
 
-# Logs
-*.log
-logs/
-
-# Temporary files
-*.tmp
-*.bak
-scratch/
-
-# Large cache files
+# Large Competition Datasets (never commit to GitHub >100MB)
+dataset/
+data/
+*.zip
+*.tar.gz
 *.pkl
-*.pickle
+scratch/
+scratch_repo/
+__MACOSX/
+
+# Intermediate cache files
+business_entity_resolution/cache/
+business_entity_resolution/logs/

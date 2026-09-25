@@ -1,273 +1,263 @@
-# Business Entity Resolution — Solution README
+# ML Challenge 2026 Problem Statement
 
-## Team Setup
+## Business Entity Resolution Challenge
 
-This is a **2-person team** solution.
+In large-scale commercial platforms, business identity data arrives from multiple independent sources — each contributing partial, noisy fragments of information about the same real-world entities. These fragments share no common identifiers, and the challenge of determining which records refer to the same business is known as Entity Resolution (ER). Your challenge is to build an ML solution that, given business records from 3 independent data sources with noisy and inconsistent fields, determines which records across sources refer to the same real-world business entity.
 
-| Person | Responsibility | Data |
-|--------|---------------|------|
-| Person 1 (Laptop 1) | S1 first half candidate generation | `S1_Laptop1.tsv` |
-| Person 2 (Laptop 2) | Feature engineering, ML training, full inference | `S1_Laptop2.tsv` + all S2/S3 |
+Source 1 is the deduplicated reference source. Your task is to find all matching records from Source 2 and Source 3 for each Source 1 entity. A Source 1 entity may match zero, one, or many records from Source 2 and Source 3.
 
----
+### File Format
 
-## Directory Structure
+**All files in this challenge are tab-separated (`.tsv`), and your submissions must be tab-separated too.** Tabs are used because business addresses and the ID list columns both contain commas. Read them with an explicit tab separator, for example:
 
-```
-student_resource/
-├── code/                           # All pipeline scripts (commit this)
-│   ├── normalize.py                # Shared normalization utilities
-│   ├── 01_generate_candidates_laptop2.py
-│   ├── 02_merge_candidates.py
-│   ├── 03_feature_engineering.py
-│   ├── 04_train_model.py
-│   ├── 05_generate_test_candidates.py
-│   ├── 06_final_inference.py
-│   ├── 07_split_s1_laptop2.py
-│   ├── 08_validate_and_fix.py
-│   └── run_pipeline.py             # Master runner
-├── dataset/
-│   ├── train/                      # Training data (NOT in git)
-│   │   ├── S1_Laptop2.tsv
-│   │   ├── train_source2.tsv
-│   │   └── train_source3.tsv
-│   └── test/                       # Test data (NOT in git)
-├── output/                         # Generated outputs (NOT in git)
-│   ├── candidates_laptop2.tsv
-│   ├── candidates_laptop1.tsv      # Received from Person 1 via Drive/USB
-│   ├── candidate_pairs.tsv         # Merged (SUBMIT THIS)
-│   ├── test_candidate_pairs.tsv
-│   ├── features_train.parquet
-│   ├── features_test.parquet
-│   └── matching_results.tsv        # FINAL SUBMISSION FILE
-├── model/                          # Trained model (NOT in git — too large)
-│   ├── lgbm_model.txt
-│   ├── threshold.txt
-│   ├── feature_importance.csv
-│   └── validation_metrics.json
-├── utils/
-│   └── validate_submission.py      # Official validator (provided)
-├── requirements.txt
-└── README.md
+```python
+import pandas as pd
+df = pd.read_csv("dataset/train/train_source1.tsv", sep="\t")
 ```
 
----
+Reading a `.tsv` without `sep="\t"` will silently produce a single column containing the whole line.
 
-## Setup
+### Data Description:
 
-```bash
-# Install dependencies
-pip install -r requirements.txt
+Each source file (`*_source1.tsv`, `*_source2.tsv`, `*_source3.tsv`) has the following columns:
+
+1. **entity_id:** Unique identifier for the record. The prefix indicates the source — `S1-`, `S2-`, or `S3-`.
+2. **business_name:** Name of the business entity (may contain abbreviations, legal suffixes, typos, transliterations)
+3. **business_address:** Address of the business (may contain partial addresses, format variations, missing components, landmark-based references)
+4. **country:** Country label for the record. The **training** data covers `US` and `India`. The **test** set additionally contains a third country, `France`, that does **not** appear in the training data. Treat `country` as an open set of string labels: do **not** hard-code, filter, or one-hot your pipeline to only `{US, India}`, and remember that every test entity — `France` included — must appear in your submission.
+
+There is no separate *source* column — a record's source is given by its `entity_id` prefix (`S1-`/`S2-`/`S3-`) and by which file it appears in.
+
+The ground truth file (`train_ground_truth.tsv`) has two columns:
+
+1. **source1_entity_id:** The `entity_id` of a Source 1 record
+2. **matched_entity_ids:** Comma-separated list of matching `entity_id`s from Source 2 and/or Source 3 (empty when the entity has no matches)
+
+**Noise Patterns to Expect:**
+
+- **Name variations:** Abbreviations (Corp vs. Corporation, Pvt vs. Private, Ltd vs. Limited), legal suffix inconsistencies, DBA/trade names, punctuation differences (& vs. "and"), word-order transpositions, typos
+- **Address variations:** Abbreviations (Rd vs. Road, St vs. Street), transliteration variants, missing components (no PIN code, no state), landmark-based references (Near SBI ATM), municipal numbering formats, component reordering
+
+### Dataset Details:
+
+- **Training Dataset:** Business records across 3 sources with ground truth matching labels
+- **Test Set:** Business records across 3 sources without matching labels
+
+### File Descriptions:
+
+*Training files*
+
+1. **dataset/train/train_source1.tsv:** Source 1 training records (the deduplicated reference source)
+2. **dataset/train/train_source2.tsv:** Source 2 training records
+3. **dataset/train/train_source3.tsv:** Source 3 training records
+4. **dataset/train/train_ground_truth.tsv:** Ground truth matching labels for the training set
+
+*Test files*
+
+1. **dataset/test/test_source1.tsv:** Source 1 test records. Generate matches for every entity in this file.
+2. **dataset/test/test_source2.tsv:** Source 2 test records
+3. **dataset/test/test_source3.tsv:** Source 3 test records
+
+No ground truth is provided for the test set. To measure your own performance, hold out a validation split from the training data and score it yourself using the F_0.5 formula given below.
+
+### Output Format:
+
+Your solution produces **two** tab-separated files, both placed in the `output/`
+folder of your final submission package (see *Final Submission Package* below):
+
+1. **`matching_results.tsv`** — your final entity matches. **This is the only file
+   scored on the leaderboard** — it is what you upload to the Portal during the challenge.
+2. **`candidate_pairs.tsv`** — the candidate set your blocking / candidate-generation
+   stage produced, before your final matching model narrowed it down.
+
+#### matching_results.tsv
+
+Your final entity matches:
+
+| Column | Description |
+| --- | --- |
+| source1_entity_id | The `entity_id` of a Source 1 record |
+| matched_entity_ids | Comma-separated list of matching `entity_id`s from Source 2 and/or Source 3 |
+
+**Example** (columns separated by a single tab, ID lists separated by commas with no quoting):
+
+```
+source1_entity_id	matched_entity_ids
+S1-00001	S2-00047,S2-00193,S3-00812
+S1-00002	S3-00004
+S1-00003	
 ```
 
----
+**Important:**
 
-## Pipeline Overview
+- Every Source 1 entity in the test set must have exactly one row
+- Leave `matched_entity_ids` empty for entities with no matches (singletons)
+- No duplicate entity IDs within a single ID list
+- ID lists must only contain Source 2 or Source 3 IDs that exist in the test set
 
-### Step 0 — S1 Split (if needed)
+#### candidate_pairs.tsv
 
-If `dataset/train/S1_Laptop2.tsv` doesn't exist:
+The candidate set from your blocking stage — every Source 2 / Source 3 record you
+considered a plausible match for each Source 1 entity, *before* your final matching
+model narrowed it down. This is the **exact set of records you feed into your matching model
+for inference** — the final candidate list *just before* the ML model scores them, not
+the raw output of an early blocking pass you later filter further. If your pipeline has
+several blocking/filtering stages, `candidate_pairs.tsv` is the *last* one: whatever
+your model actually runs inference over. Every ID in `matching_results.tsv` should
+therefore appear here.
 
-```bash
-python3 code/07_split_s1_laptop2.py
+It is **not scored on the leaderboard**; we use it to analyse blocking quality (recall
+ceiling, reduction ratio) and to verify your pipeline.
+
+| Column | Description |
+| --- | --- |
+| source1_entity_id | The `entity_id` of a Source 1 record |
+| candidate_entity_ids | Comma-separated list of candidate `entity_id`s from Source 2 and/or Source 3 |
+
+**Example:**
+
+```
+source1_entity_id	candidate_entity_ids
+S1-00001	S2-00047,S2-00193,S3-00812,S3-00999
+S1-00002	S3-00004
+S1-00003	
 ```
 
-This takes the sorted second half (50%) of `train_source1.tsv`.
+Same rules as `matching_results.tsv`: one row per Source 1 entity, `candidate_entity_ids`
+empty when blocking found no candidates, S2-/S3- IDs only, no duplicates within a list.
+Your final matches should be a **subset** of your candidates (a matched ID that never
+appeared as a candidate signals a pipeline bug — the validator warns about it).
 
-### Step 1 — Candidate Generation (Laptop 2's S1 portion)
-
-```bash
-python3 code/01_generate_candidates_laptop2.py
-```
-
-Outputs: `output/candidates_laptop2.tsv`  
-Columns: `source1_entity_id | candidate_entity_id`
-
-**Blocking strategy:** 6 blocking key types per entity:
-1. `name_prefix4_country` — first 4 chars of name first token + country
-2. `name_prefix4_2_country` — first 4 chars of second token + country
-3. `name_bigram_country` — sorted 6-char prefixes of first two name tokens
-4. `addr_num_name_prefix` — first address number + name prefix + country
-5. `addr_prefix_country` — first 2 significant address tokens
-6. `name_token0_exact_country` — exact first token + country
-
-Each blocking key maps to at most 200 candidates (hard cap).
-
-### Step 2 — Merge Candidates
-
-**After receiving `candidates_laptop1.tsv` from Person 1** (via Drive/USB/network):
-
-```bash
-# Place candidates_laptop1.tsv in output/
-python3 code/02_merge_candidates.py
-```
-
-Outputs: `output/candidate_pairs.tsv`  
-Columns: `source1_entity_id | candidate_entity_ids` (comma-separated)
-
-- Deduplicates pairs
-- Verifies all IDs are S2- or S3- prefixed
-- Adds empty rows for S1 entities with no candidates
-
-### Step 3 — Feature Engineering (Training)
-
-```bash
-python3 code/03_feature_engineering.py train
-```
-
-Outputs: `output/features_train.parquet`
-
-**Features computed per candidate pair:**
-
-| Category | Features |
-|----------|----------|
-| Name | exact_match, token_overlap, jaccard_3gram, char_sim, prefix_sim, len_diff, fuzzy_ratio, fuzzy_partial, fuzzy_token_sort, fuzzy_token_set |
-| Address | exact_match, token_overlap, jaccard_3gram, char_sim, numeric_overlap, prefix_sim, len_diff, fuzzy_ratio |
-| Country | exact_match, norm_match |
-| Combined | name_addr_combined, missing indicators (4), source indicator (2) |
-
-Total: **26 features**
-
-### Step 4 — Model Training + Threshold Tuning
-
-```bash
-python3 code/04_train_model.py
-```
-
-- Splits by S1 entity (80% train / 20% val — no leakage)
-- Trains LightGBM with `scale_pos_weight` for class imbalance
-- Evaluates F0.5 at thresholds: 0.50 → 0.98
-- Saves model + best threshold to `model/`
-
-### Step 5 — Test Candidate Generation
-
-```bash
-python3 code/05_generate_test_candidates.py
-```
-
-Outputs: `output/test_candidate_pairs.tsv`  
-Same blocking logic as training.
-
-### Step 6 — Feature Engineering (Test)
-
-```bash
-python3 code/03_feature_engineering.py test
-```
-
-Outputs: `output/features_test.parquet`
-
-### Step 7 — Final Inference
-
-```bash
-python3 code/06_final_inference.py
-```
-
-Outputs: `output/matching_results.tsv`  
-Applies threshold, generates one row per test S1 entity.
-
-### Step 8 — Validate
+**Validate before submitting:** a helper script `utils/validate_submission.py` (stdlib
+only, no dependencies) checks both files against every rule above so you can catch a
+rejection locally instead of spending a submission on it. Run it from this
+`student_resource/` directory:
 
 ```bash
 python3 utils/validate_submission.py \
-  --matching output/matching_results.tsv \
-  --candidate output/candidate_pairs.tsv \
-  --test-dir dataset/test
+    --matching output/matching_results.tsv \
+    --candidate output/candidate_pairs.tsv \
+    --test-dir dataset/test
 ```
 
-Or use the wrapper:
+It prints `PASS` (exit 0) when the files are safe to submit, or a numbered list of issues
+to fix (exit 1). It only reads your output files and the test source files; it does not
+compute your score.
 
-```bash
-python3 code/08_validate_and_fix.py
-```
+### Final Submission Package:
 
----
+In addition to your live leaderboard uploads, **every team submits a single zip
+archive** with your code and outputs. We use it to reproduce your results, audit your
+blocking, and check the fair-play and model-license rules — the top teams' packages are
+reviewed in detail before the final rankings are confirmed.
 
-## Full Pipeline (One Command)
-
-```bash
-# Full pipeline
-python3 code/run_pipeline.py --mode full
-
-# Training only
-python3 code/run_pipeline.py --mode train
-
-# Test inference only (after training)
-python3 code/run_pipeline.py --mode test
-```
-
----
-
-## Normalization
-
-Business names:
-- Unicode NFKC normalization
-- Lowercase
-- Expand `&` → `and`
-- Remove punctuation (keep alphanumeric + Devanagari + Latin extended)
-- Abbreviate legal suffixes: `incorporated` → `inc`, `limited` → `ltd`, etc.
-- Collapse whitespace
-
-Addresses:
-- Unicode NFKC normalization
-- Lowercase
-- Remove punctuation
-- Abbreviate: `street` → `st`, `road` → `rd`, `avenue` → `ave`, etc.
-- Directional abbreviations: `north` → `n`, `south` → `s`
-
-Country:
-- Lowercase + strip
-
----
-
-## Model
-
-**Algorithm:** LightGBM (gradient boosted trees)  
-**Objective:** Binary classification  
-**Loss:** Binary cross-entropy  
-**Class imbalance:** `scale_pos_weight = neg_count / pos_count`  
-**Early stopping:** 50 rounds on validation logloss  
-**Hyperparameters:** `num_leaves=127`, `lr=0.05`, `subsample=0.8`, `colsample=0.8`
-
----
-
-## Evaluation
-
-**Metric:** F0.5 (precision-weighted) at entity level  
+Structure:
 
 ```
-F0.5 = (1.25 × Precision × Recall) / (0.25 × Precision + Recall)
+<team_name>_submission.zip
+├── output/
+│   ├── matching_results.tsv        # final matches (same file you upload to the leaderboard)
+│   └── candidate_pairs.tsv         # your blocking candidate set
+├── code/
+│   └── business_entity_resolution/
+│       ├── src/                    # all your source code
+│       ├── README.md               # how to reproduce end-to-end (data → blocking → matching → output)
+│       └── requirements.txt        # pinned dependencies / environment
+└── Documentation_template.md       # your methodology write-up (this filled-in template)
 ```
 
-- Computed per S1 entity, then macro-averaged
-- Singletons (no true matches): score 1.0 if predicted empty, 0.0 otherwise
-- Split: 80% train / 20% val by S1 entity (not by candidate pair)
+- **`output/`** — the two TSV files described above: `matching_results.tsv` and
+  `candidate_pairs.tsv`.
+- **`code/business_entity_resolution/`** — a self-contained, runnable copy of your
+  pipeline. Put all source under `src/`, and include a `README.md` with exact run
+  instructions plus a `requirements.txt` (or equivalent environment file) pinning
+  versions. Anyone should be able to regenerate both output files from the
+  training/test data using only what is in this folder.
+- **Methodology document** — fill in the provided `Documentation_template.md` and drop
+  it straight into the zip (the filled-in `.md` is fine; a `.pdf` export works too). No
+  need to rename it.
 
----
+### Constraints:
 
-## Person 1 Coordination
+1. Format your output exactly as described above. Submissions that fail validation will not be evaluated. You should see a `SCORED` status with your F_0.5 score if the output is correctly formatted.
+2. `matched_entity_ids` must only reference entities from Source 2 or Source 3. Self-matches to Source 1, and IDs that do not exist in the test set, will be rejected.
+3. Every Source 1 entity must appear in your submission. Missing entities will cause rejection.
+4. Duplicate entity IDs in any ID list will cause rejection, as will duplicate `source1_entity_id` rows.
+5. Final model should be a MIT/Apache 2.0 License model and up to 8 Billion parameters.
 
-Person 1 generates: `output/candidates_laptop1.tsv`
+### Evaluation Criteria:
 
-Transfer method: Google Drive / OneDrive / USB
+Submissions are evaluated using **F_β Score (β = 0.5)** — a precision-heavy metric that penalizes false merges (matching two different businesses) more than missed matches.
 
-**NEVER commit candidate files to git.** They are too large and contain derived data.
+**Formula:**
 
----
+```
+F_0.5 = (1.25 × Precision × Recall) / (0.25 × Precision + Recall)
+```
 
-## Important Notes
+Computed as a **macro-average**: F_0.5 is calculated per Source 1 entity, then averaged across **all** Source 1 entities in the evaluation set.
 
-- Never commit `dataset/`, `output/`, `model/`, or `*.tsv` files to git
-- The `.gitignore` excludes these automatically
-- Test set includes `France` country — do not hardcode country filtering
-- Every test S1 entity must appear in `matching_results.tsv` (even with empty match)
-- F0.5 rewards precision over recall — prefer higher thresholds
+Singletons are included in that average. A Source 1 entity with no true matches scores 1.0 when you correctly predict an empty list, and 0.0 when you predict any match for it. Correctly identifying singletons therefore earns credit, and false merges on them are penalised.
 
----
+**Why precision-heavy?** In real-world entity resolution, merging two distinct businesses (false positive) is more damaging than missing a link (false negative). F_0.5 weights precision 2× over recall.
 
-## How to Reproduce Results
+**Example:**
 
-1. Install dependencies: `pip install -r requirements.txt`
-2. Place data in `dataset/train/` and `dataset/test/`
-3. Place `candidates_laptop1.tsv` in `output/` (from Person 1)
-4. Run: `python3 code/run_pipeline.py --mode full`
-5. Submit: `output/matching_results.tsv` to leaderboard
+- Your model predicts S1-00001 matches [S2-00047, S2-00193, S3-00812]
+- Ground truth says S1-00001 matches [S2-00047, S3-00812]
+- Precision = 2/3, Recall = 2/2 = 1.0
+- F_0.5 = (1.25 × 0.667 × 1.0) / (0.25 × 0.667 + 1.0) = **0.714**
+
+### Leaderboard Information:
+
+- **Public Leaderboard:** During the challenge, rankings will be based on a subset of the test set to provide real-time feedback on your model's performance.
+- **Private Leaderboard:** After the challenge ends, the private leaderboard will be revealed, which uses the remaining portion of the test set for evaluation.
+- **Final Rankings:** The final decision will be based on the private leaderboard.
+
+You submit predictions for the full test set in both cases; the split is applied during scoring.
+
+### Submission Requirements:
+
+1. **Leaderboard (during the challenge):** upload `matching_results.tsv` in the Portal —
+   tab-separated, with the exact column names described above. This is what drives the
+   public and private leaderboards.
+2. **Final submission package:** submit the single zip described in *Final Submission
+   Package* above — `output/` with **both** `matching_results.tsv` (final matches) and
+   `candidate_pairs.tsv` (your candidate-generation / blocking set fed to the model),
+   `code/business_entity_resolution/` (runnable pipeline), and your methodology document.
+   All teams must submit it; the top teams' packages are reviewed before the final
+   rankings are confirmed.
+3. Your methodology document must describe:
+   - Methodology used
+   - Candidate generation / blocking strategy
+   - Model architecture and feature engineering
+   - Any other relevant information about the approach
+
+   A template for this documentation is provided in `Documentation_template.md`. There is no page limit — prioritise clarity and technical depth over brevity.
+
+### **Academic Integrity and Fair Play:**
+
+**⚠️ STRICTLY PROHIBITED: External Data Lookup**
+
+Participants are **STRICTLY NOT ALLOWED** to use external databases, APIs, or services to look up business identities or resolve entities. This includes but is not limited to:
+
+- Using commercial entity resolution APIs or services
+- Looking up business registrations from government databases
+- Using geocoding APIs to normalize addresses
+- Any external data augmentation from internet sources
+
+**Enforcement:**
+
+- All submitted approaches, methodologies, and code pipelines will be thoroughly reviewed and verified
+- Any evidence of external data lookup will result in **immediate disqualification**
+
+**Fair Play:** This challenge is designed to test your machine learning and data science skills using only the provided training data.
+
+### Tips for Success:
+
+- Invest in a strong blocking/candidate generation strategy — it determines the upper bound of your recall
+- Explore string similarity features (Jaccard, Levenshtein, TF-IDF cosine) for name and address matching
+- Pay attention to country specific address patterns
+- Consider the precision-recall trade-off carefully — F_0.5 rewards precision more than recall
+- Do not neglect singletons — correctly predicting "no match" is worth a full 1.0 on that entity
+- Validate your own output format against the rules above before submitting
