@@ -200,15 +200,14 @@ def load_entity_lookup(source_files: list) -> dict:
         )
         for chunk in tqdm(reader, desc=f"    {os.path.basename(fpath)}"):
             chunk = chunk.fillna("")
-            for _, row in chunk.iterrows():
-                eid = row["entity_id"]
-                lookup[eid] = (
-                    normalize_name(row["business_name"]),
-                    normalize_address(row["business_address"]),
-                    normalize_country(row["country"]),
-                    row["country"],
-                    row["business_name"],
-                    row["business_address"],
+            for row in chunk.itertuples(index=False):
+                lookup[row.entity_id] = (
+                    normalize_name(row.business_name),
+                    normalize_address(row.business_address),
+                    normalize_country(row.country),
+                    row.country,
+                    row.business_name,
+                    row.business_address,
                 )
             del chunk
         gc.collect()
@@ -222,9 +221,9 @@ def load_ground_truth() -> dict:
     gt = {}
     df = pd.read_csv(GROUND_TRUTH, sep="\t", dtype=str)
     df = df.fillna("")
-    for _, row in df.iterrows():
-        s1_id = row["source1_entity_id"]
-        matched = row["matched_entity_ids"]
+    for row in df.itertuples(index=False):
+        s1_id = row.source1_entity_id
+        matched = row.matched_entity_ids
         if matched.strip():
             gt[s1_id] = set(matched.split(","))
         else:
@@ -354,9 +353,9 @@ def process_candidate_file(
     for chunk in tqdm(reader, desc="  Candidate chunks"):
         chunk = chunk.fillna("")
         rows_batch = []
-        for _, row in chunk.iterrows():
-            s1_id = row["source1_entity_id"]
-            cand_str = row.get("candidate_entity_ids", "").strip()
+        for row in chunk.itertuples(index=False):
+            s1_id = row.source1_entity_id
+            cand_str = (row.candidate_entity_ids if hasattr(row, 'candidate_entity_ids') else "").strip()
             if not cand_str:
                 continue  # no candidates for this S1
             cands = cand_str.split(",")

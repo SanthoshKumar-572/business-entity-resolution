@@ -75,9 +75,9 @@ def load_test_candidates() -> dict:
     )
     for chunk in reader:
         chunk = chunk.fillna("")
-        for _, row in chunk.iterrows():
-            s1_id = row["source1_entity_id"]
-            cand_str = row.get("candidate_entity_ids", "").strip()
+        for row in chunk.itertuples(index=False):
+            s1_id = row.source1_entity_id
+            cand_str = (row.candidate_entity_ids if hasattr(row, 'candidate_entity_ids') else "").strip()
             cand_map[s1_id] = set(cand_str.split(",")) if cand_str else set()
         del chunk
     print(f"  Loaded {len(cand_map):,} S1 candidate entries")
@@ -149,9 +149,9 @@ def main():
 
     results = {s1_id: [] for s1_id in all_test_s1}
 
-    for _, row in tqdm(matched_df.iterrows(), total=len(matched_df), desc="  Building results"):
-        s1_id = row["source1_entity_id"]
-        cand_id = row["candidate_entity_id"]
+    for row in tqdm(matched_df.itertuples(index=False), total=len(matched_df), desc="  Building results"):
+        s1_id = row.source1_entity_id
+        cand_id = row.candidate_entity_id
 
         # Safety: only include if in candidate set
         if cand_map and s1_id in cand_map and cand_id not in cand_map[s1_id]:

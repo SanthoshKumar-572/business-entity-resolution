@@ -12,6 +12,7 @@ Strategy:
   - Emit candidate pairs without doing pairwise comparison
 
 Memory-efficient: processes S2/S3 in chunks, builds dict-based indexes.
+Performance: uses itertuples() (~10x faster than iterrows).
 """
 
 import os
@@ -53,6 +54,7 @@ def build_blocking_index(source_file: str, source_label: str) -> dict:
     Build an inverted index: blocking_key → set of entity_ids.
 
     Processes the source file in chunks to stay within memory limits.
+    Uses itertuples() (not iterrows) for fast row access.
     Returns dict[str, list[str]].
     """
     print(f"\n[Index] Building blocking index for {source_label} ...")
@@ -69,33 +71,30 @@ def build_blocking_index(source_file: str, source_label: str) -> dict:
     total_rows = 0
     for chunk in tqdm(reader, desc=f"  {source_label} chunks"):
         chunk = chunk.fillna("")
-        for _, row in chunk.iterrows():
-            eid = row["entity_id"]
-            norm_name = normalize_name(row["business_name"])
-            norm_addr = normalize_address(row["business_address"])
-            norm_ctry = normalize_country(row["country"])
+        # itertuples is ~10x faster than iterrows for large DataFrames
+        for row in chunk.itertuples(index=False):
+            norm_name = normalize_name(row.business_name)
+            norm_addr = normalize_address(row.business_address)
+            norm_ctry = normalize_country(row.country)
 
             for key_type, key_val in get_blocking_keys(norm_name, norm_addr, norm_ctry):
                 full_key = f"{key_type}::{key_val}"
-                index[full_key].add(eid)
+                index[full_key].add(row.entity_id)
 
         total_rows += len(chunk)
         del chunk
 
     # Convert sets to lists, apply cap
-    capped = {}
-    for k, v in index.items():
-        lst = list(v)
-        capped[k] = lst[:MAX_CANDIDATES_PER_BLOCK_KEY]
+    capped = {k: list(v)[:MAX_CANDIDATES_PER_BLOCK_KEY] for k, v in index.items()}
 
     print(f"  {source_label}: indexed {total_rows:,} entities, {len(capped):,} unique blocking keys")
     return capped
 
 
-def generate_candidates(s1_file: str, index: dict, output_writer, written_pairs: set):
+def generate_candidates(s1_file: str, index: dict, output_writer, written_pairs: set) -> int:
     """
     For each S1 entity in s1_file, look up blocking keys in the combined index
-    and write candidate pairs.
+    and write candidate pairs. Uses itertuples() for speed.
     """
     reader = pd.read_csv(
         s1_file,
@@ -108,11 +107,11 @@ def generate_candidates(s1_file: str, index: dict, output_writer, written_pairs:
     total_pairs = 0
     for chunk in tqdm(reader, desc="  S1 chunks"):
         chunk = chunk.fillna("")
-        for _, row in chunk.iterrows():
-            s1_id = row["entity_id"]
-            norm_name = normalize_name(row["business_name"])
-            norm_addr = normalize_address(row["business_address"])
-            norm_ctry = normalize_country(row["country"])
+        for row in chunk.itertuples(index=False):
+            s1_id = row.entity_id
+            norm_name = normalize_name(row.business_name)
+            norm_addr = normalize_address(row.business_address)
+            norm_ctry = normalize_country(row.country)
 
             candidates = set()
             for key_type, key_val in get_blocking_keys(norm_name, norm_addr, norm_ctry):

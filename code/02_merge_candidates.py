@@ -61,9 +61,12 @@ def read_candidate_file_chunked(filepath: str, label: str) -> dict:
 
     for chunk in tqdm(reader, desc=f"    {label}"):
         chunk = chunk.fillna("")
-        for _, row in chunk.iterrows():
-            s1_id = str(row.get("source1_entity_id", "")).strip()
-            cand_id = str(row.get("candidate_entity_id", "")).strip()
+        cols = chunk.columns.tolist()
+        s1_col = "source1_entity_id" if "source1_entity_id" in cols else cols[0]
+        cand_col = "candidate_entity_id" if "candidate_entity_id" in cols else cols[1]
+        for row in chunk.itertuples(index=False):
+            s1_id = str(getattr(row, s1_col, "")).strip()
+            cand_id = str(getattr(row, cand_col, "")).strip()
             if not s1_id or not cand_id:
                 continue
             if not (cand_id.startswith("S2-") or cand_id.startswith("S3-")):

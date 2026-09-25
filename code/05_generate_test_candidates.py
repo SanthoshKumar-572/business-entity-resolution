@@ -56,14 +56,13 @@ def build_blocking_index(source_file: str, source_label: str) -> dict:
     total_rows = 0
     for chunk in tqdm(reader, desc=f"  {source_label}"):
         chunk = chunk.fillna("")
-        for _, row in chunk.iterrows():
-            eid = row["entity_id"]
-            nn = normalize_name(row["business_name"])
-            na = normalize_address(row["business_address"])
-            nc = normalize_country(row["country"])
+        for row in chunk.itertuples(index=False):
+            nn = normalize_name(row.business_name)
+            na = normalize_address(row.business_address)
+            nc = normalize_country(row.country)
             for key_type, key_val in get_blocking_keys(nn, na, nc):
                 full_key = f"{key_type}::{key_val}"
-                index[full_key].add(eid)
+                index[full_key].add(row.entity_id)
         total_rows += len(chunk)
         del chunk
 
@@ -94,11 +93,11 @@ def generate_test_candidates(
 
     for chunk in tqdm(reader, desc="  Test S1 chunks"):
         chunk = chunk.fillna("")
-        for _, row in chunk.iterrows():
-            s1_id = row["entity_id"]
-            nn = normalize_name(row["business_name"])
-            na = normalize_address(row["business_address"])
-            nc = normalize_country(row["country"])
+        for row in chunk.itertuples(index=False):
+            s1_id = row.entity_id
+            nn = normalize_name(row.business_name)
+            na = normalize_address(row.business_address)
+            nc = normalize_country(row.country)
 
             candidates = set()
             for key_type, key_val in get_blocking_keys(nn, na, nc):
